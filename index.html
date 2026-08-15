@@ -935,7 +935,12 @@
     if(DATA.loading) return; DATA.loading=true; hideError();
     Promise.all([loadSettings(), loadFlow()])
       .then(function(){ DATA.loading=false; renderAll(); })
-      .catch(function(err){ DATA.loading=false; showError('数据加载失败：'+(err&&err.message||'网络异常')+'，请点右上角重试'); });
+      .catch(function(err){
+        DATA.loading=false;
+        var m=(err&&err.message)||'网络异常';
+        if(/Not Found|404|REPO_ACCESS/i.test(m)) m='无法读取仓库数据，请确认 Token 具备该仓库读写权限（经典 PAT 带 repo scope），或点重试';
+        showError('数据加载失败：'+m+'，请点右上角重试');
+      });
   }
 
   window.__lb={ retry:function(){ hideError(); loadAll(); } };
@@ -962,9 +967,20 @@
         : fetch('https://api.github.com/user',{headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}})
             .then(function(r){ return r.json(); }).then(function(u){ if(!u.login) throw new Error('无法识别用户'); return u.login; });
       who.then(function(login){
-        GH.owner=login; localStorage.setItem('gh_token',token); localStorage.setItem('gh_owner',login);
-        m.style.display='none'; errEl.textContent=''; hideError(); loadAll();
-      }).catch(function(err){ errEl.textContent='连接失败：'+(err&&err.message||'请检查 Token 权限与网络'); });
+        // 仅验证 /user 不够：细粒度令牌可能能读用户信息却无仓库权限，需在连接时直接校验仓库可达性
+        var hdr={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};
+        return fetch('https://api.github.com/repos/'+login+'/'+repo,{headers:hdr}).then(function(r){
+          if(!r.ok) throw new Error('REPO_ACCESS');
+          GH.owner=login; GH.token=token; GH.repo=repo;
+          localStorage.setItem('gh_token',token); localStorage.setItem('gh_owner',login);
+          m.style.display='none'; errEl.textContent=''; hideError(); loadAll();
+        });
+      }).catch(function(err){
+        var msg = (err && err.message==='REPO_ACCESS')
+          ? '该 Token 无法访问仓库「'+repo+'」。请使用带 repo 权限的经典 PAT（ghp_ 开头），或在 GitHub 给此令牌授权该仓库。'
+          : '连接失败：'+(err&&err.message||'请检查 Token 权限与网络');
+        errEl.textContent=msg;
+      });
     });
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
